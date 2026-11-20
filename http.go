@@ -37,7 +37,11 @@ type HTTPOptions struct {
 
 // Middleware wraps handlers with a per-IP limit. Wrappers built from the same
 // limiter share its buckets; use a separate limiter for each independent tier.
+// Calling Middleware on a nil limiter panics at setup time.
 func (l *Limiter) Middleware(source clientip.Source, opts HTTPOptions) func(http.Handler) http.Handler {
+	if l == nil {
+		panic("ratelimit: nil limiter passed to Middleware")
+	}
 	var retryAfter string
 	if opts.RetryAfter > 0 {
 		retryAfter = strconv.FormatInt(int64((opts.RetryAfter-1)/time.Second)+1, 10)

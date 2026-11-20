@@ -141,3 +141,37 @@ func TestMiddlewareOverflowUsesCustomResponse(t *testing.T) {
 		t.Errorf("calls: next=%d, exceeded=%d, both should be 2", nextCalls, exceededCalls)
 	}
 }
+
+func TestMiddlewareRetryAfterRounding(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		hint time.Duration
+		want string
+	}{
+		{"below", time.Second - time.Nanosecond, "1"},
+		{"exact", time.Second, "1"},
+		{"above", time.Second + time.Nanosecond, "2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var l Limiter
+			h := l.Middleware(clientip.Source{}, HTTPOptions{RetryAfter: tc.hint})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("zero limiter let request through")
+			}))
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+			if got := w.Header().Get("Retry-After"); w.Code != http.StatusTooManyRequests || got != tc.want {
+				t.Errorf("status = %d, Retry-After = %q; want 429 and %q", w.Code, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNilLimiterMiddlewarePanicsAtSetup(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "ratelimit: nil limiter passed to Middleware" {
+			t.Errorf("setup panic = %v; want an explicit nil limiter error", got)
+		}
+	}()
+	var l *Limiter
+	l.Middleware(clientip.Source{}, HTTPOptions{})
+}
