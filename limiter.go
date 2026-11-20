@@ -31,6 +31,11 @@ type Config struct {
 	// freed. Never enable this for a security-sensitive limit.
 	FailOpenWhenFull bool
 
+	// OnFull runs when Allow refuses a new key because the table is full.
+	// It runs outside the lock and may be called concurrently and once per
+	// refused request. Callers should rate-limit any logging it does.
+	OnFull func()
+
 	// Now supplies nondecreasing time. Nil means time.Now. The limiter calls
 	// it under its lock; it must not call back into the limiter.
 	Now func() time.Time
@@ -79,19 +84,31 @@ func New(cfg Config) (*Limiter, error) {
 // refused, even in fail-open mode. A full table refuses untracked keys unless
 // FailOpenWhenFull was explicitly set.
 func (l *Limiter) Allow(key string) bool {
-	return l.check(key, true)
+	allowed, full := l.check(key, true)
+	if full && l.cfg.OnFull != nil {
+		l.cfg.OnFull()
+	}
+	return allowed
 }
 
 // Exhausted reports whether a key's attempt would be refused, without spending
 // a token or tracking a new key. A later Allow is a separate decision: another
 // goroutine may consume a token or fill the table in between.
 func (l *Limiter) Exhausted(key string) bool {
-	return !l.check(key, false)
+	allowed, _ := l.check(key, false)
+	return !allowed
 }
 
-func (l *Limiter) check(key string, spend bool) bool {
+// Len returns the number of currently tracked keys without running a sweep.
+func (l *Limiter) Len() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.buckets)
+}
+
+func (l *Limiter) check(key string, spend bool) (allowed, refusedFull bool) {
 	if l.cfg.Now == nil || len(key) > l.cfg.MaxKeyBytes {
-		return false
+		return false, false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -105,11 +122,11 @@ func (l *Limiter) check(key string, spend bool) bool {
 		if len(l.buckets) >= l.cfg.MaxKeys {
 			l.sweep(now)
 			if len(l.buckets) >= l.cfg.MaxKeys {
-				return l.cfg.FailOpenWhenFull
+				return l.cfg.FailOpenWhenFull, !l.cfg.FailOpenWhenFull
 			}
 		}
 		if !spend {
-			return true
+			return true, false
 		}
 		if len(l.buckets) == 0 {
 			l.nextIdleSweep = now.Add(l.cfg.IdleTTL)
@@ -119,10 +136,10 @@ func (l *Limiter) check(key string, spend bool) bool {
 		l.buckets[strings.Clone(key)] = b
 	}
 	if !spend {
-		return b.limiter.TokensAt(now) >= 1
+		return b.limiter.TokensAt(now) >= 1, false
 	}
 	b.seen = now
-	return b.limiter.AllowN(now, 1)
+	return b.limiter.AllowN(now, 1), false
 }
 
 // sweep runs under the same lock as lookups and token decisions: a request

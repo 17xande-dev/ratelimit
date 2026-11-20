@@ -100,9 +100,11 @@ failure is not atomic; concurrent failures can pass the check together.
 
 Each limiter holds at most `MaxKeys` buckets (default 10,000). Each retained
 key holds at most `MaxKeyBytes` bytes (default 256), copied so a short substring
-cannot retain a large request allocation. That bounds default key payloads to
-2,560,000 bytes per limiter, plus map storage, bucket objects and allocator
-overhead. This limit is per process, not shared across replicas.
+cannot retain a large request allocation. Measured live heap, including map and
+bucket overhead, was about 411 bytes per key with 256-byte keys (about 4.1 MB
+for a full default limiter) and about 170 bytes per short key. These figures
+vary with the Go runtime and key lengths. This limit is per process, not
+shared across replicas.
 
 Sweeps run on use after an idle interval (default ten minutes) or when a new
 key finds the table full, at most once every five seconds. There is no
@@ -111,6 +113,12 @@ can be removed. If the table is still full, an untracked key is denied by
 default; existing keys still use their own buckets. `FailOpenWhenFull` instead
 admits untracked keys without storing them. Reserve it for best-effort traffic
 limits, never for credential checks.
+
+`Len()` reports the number of tracked keys without sweeping. Set `Config.OnFull`
+to observe capacity refusals from `Allow`. The callback runs outside the lock
+and may run concurrently, once per refused request, so rate-limit any logging
+it does. It is not called for exhausted tokens, oversized keys, `Exhausted`
+probes, or fail-open admissions.
 
 Run `make fmt-check vet test vulncheck` before committing. The test target
 enables the race detector; clock-dependent tests advance an injected clock

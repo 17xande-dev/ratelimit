@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"math"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -89,6 +90,48 @@ func TestCapacityOverflowFailsOpenOnlyForUntrackedKeys(t *testing.T) {
 	}
 }
 
+func TestOnFullAndLen(t *testing.T) {
+	for _, open := range []bool{false, true} {
+		t.Run(strconv.FormatBool(open), func(t *testing.T) {
+			var l *Limiter
+			calls := 0
+			var advance func(time.Duration)
+			l, advance = newTestLimiter(t, Config{
+				Rate: 1, Burst: 1, MaxKeys: 1, MaxKeyBytes: 7, FailOpenWhenFull: open, IdleTTL: time.Minute,
+				OnFull: func() {
+					calls++
+					// The hook must be able to query the limiter without deadlocking.
+					if got := l.Len(); got != 1 {
+						t.Errorf("Len in OnFull = %d, want 1", got)
+					}
+				},
+			})
+			if l.Len() != 0 || !l.Allow("tracked") || l.Len() != 1 {
+				t.Fatal("Len did not reflect first insertion")
+			}
+			if l.Allow("tracked") || l.Allow("oversized") || l.Exhausted("new") == open || calls != 0 {
+				t.Fatal("bucket depletion, an oversized key or a probe triggered OnFull")
+			}
+			for _, key := range []string{"new", "another"} {
+				if got := l.Allow(key); got != open {
+					t.Errorf("Allow(%q) = %t, want %t", key, got, open)
+				}
+			}
+			wantCalls := 2
+			if open {
+				wantCalls = 0
+			}
+			if calls != wantCalls || l.Len() != 1 {
+				t.Fatalf("OnFull called %d times, want %d; Len = %d, want 1", calls, wantCalls, l.Len())
+			}
+			advance(time.Minute)
+			if !l.Allow("new") || calls != wantCalls || l.Len() != 1 {
+				t.Fatal("reclaimed capacity should admit the new key without calling OnFull")
+			}
+		})
+	}
+}
+
 func TestSweepIsThrottledStartingAtZeroTime(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: 1, Burst: 1, MaxKeys: 1, IdleTTL: time.Second})
 	if !l.Allow("idle") || l.Allow("new") {
@@ -167,6 +210,33 @@ func TestKeyLengthUsesBytesAndRejectsWithoutTracking(t *testing.T) {
 	}
 }
 
+func TestSubstringKeysDoNotRetainBackingBuffers(t *testing.T) {
+	const (
+		buffers = 8
+		size    = 2 << 20
+	)
+	l, _ := newTestLimiter(t, Config{Rate: 1, Burst: 1, MaxKeys: buffers})
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for i := range buffers {
+		buffer := strings.Repeat(strconv.Itoa(i), size)
+		if !l.Allow(buffer[:32]) {
+			t.Fatalf("key %d refused", i)
+		}
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	if l.Len() != buffers {
+		t.Fatalf("tracked %d keys, want %d", l.Len(), buffers)
+	}
+	// Missing copies retain 16 MiB. Allow half of that for unrelated heap
+	// movement rather than assuming exact runtime memory accounting.
+	if after.HeapAlloc > before.HeapAlloc+buffers*size/2 {
+		t.Fatalf("live heap grew by %d bytes; short keys retained large buffers", after.HeapAlloc-before.HeapAlloc)
+	}
+}
+
 func TestExhaustedNeverSpendsOrCreates(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: 1, Burst: 2, MaxKeys: 1})
 	if l.Exhausted("unknown") || len(l.buckets) != 0 {
@@ -196,8 +266,8 @@ func TestConcurrentAllow(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	if n := admitted.Load(); n != 10 || len(l.buckets) != 2 {
-		t.Fatalf("admitted %d requests with %d keys, want 10 with 2 keys", n, len(l.buckets))
+	if n := admitted.Load(); n != 10 || l.Len() != 2 {
+		t.Fatalf("admitted %d requests with %d keys, want 10 with 2 keys", n, l.Len())
 	}
 }
 
@@ -215,5 +285,8 @@ func TestInvalidConfigAndZeroLimiter(t *testing.T) {
 	var l Limiter
 	if l.Allow("key") || !l.Exhausted("key") {
 		t.Fatal("zero limiter must deny")
+	}
+	if l.Allow("") || !l.Exhausted("") || l.Len() != 0 {
+		t.Fatal("zero limiter must deny an empty key without tracking it")
 	}
 }
