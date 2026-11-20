@@ -17,7 +17,11 @@ const (
 // Config selects a proxy policy. Set at most one field.
 type Config struct {
 	// TrustedProxies identifies controlled hops that append their actual peers
-	// to X-Forwarded-For. IPv4 and IPv6 /0 prefixes are not permitted.
+	// to X-Forwarded-For. New rejects individual IPv4 or IPv6 /0 prefixes,
+	// including their IPv4-mapped equivalents, not unions of narrower ranges.
+	// The ranges must not together cover an entire address family: for
+	// example, two complementary /1 prefixes are accepted but trust every
+	// address in that family.
 	TrustedProxies []netip.Prefix
 	// TrustedHeader requires an ingress that controls the named header and
 	// cannot be bypassed. X-Forwarded-For uses its rightmost entry; any other

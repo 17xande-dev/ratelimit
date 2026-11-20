@@ -59,10 +59,13 @@ source, err := clientip.New(clientip.Config{
 ```
 
 Check the configuration error before serving. CIDRs and a trusted header are
-mutually exclusive. Both IPv4 and IPv6 `/0` prefixes are rejected, including
-IPv4-mapped prefixes equivalent to an IPv4 `/0`. CIDR mode reads **only
-`X-Forwarded-For`**, not `CF-Connecting-IP`; verify ingress behaviour before
-replacing a resolver that read both. Prefer peer-only or CIDR mode when direct
+mutually exclusive. The wildcard check rejects individual IPv4 and IPv6 `/0`
+prefixes, including IPv4-mapped prefixes equivalent to IPv4 `/0`. The
+configured ranges must not together cover a whole address family. For example,
+`0.0.0.0/1` and `128.0.0.0/1` are accepted but together trust every IPv4
+address. CIDR mode reads **only `X-Forwarded-For`**, not `CF-Connecting-IP`;
+verify ingress behaviour before replacing a resolver that read both.
+Prefer peer-only or CIDR mode when direct
 connections are possible. A missing or malformed selected address, repeated
 single-value header, untrusted peer in CIDR mode, or chain with no untrusted
 hop falls back to the peer. The CIDR scan never skips a malformed hop and
@@ -118,7 +121,9 @@ limits, never for credential checks.
 to observe capacity refusals from `Allow`. The callback runs outside the lock
 and may run concurrently, once per refused request, so rate-limit any logging
 it does. It is not called for exhausted tokens, oversized keys, `Exhausted`
-probes, or fail-open admissions.
+probes, or fail-open admissions. `Len` and `Exhausted` are safe to call from the
+callback. Do not call `Allow` with an untracked key from `OnFull`: while the
+table is full, each refusal re-enters `OnFull` until the stack overflows.
 
 Run `make fmt-check vet test vulncheck` before committing. The test target
 enables the race detector; clock-dependent tests advance an injected clock

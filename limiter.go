@@ -34,6 +34,9 @@ type Config struct {
 	// OnFull runs when Allow refuses a new key because the table is full.
 	// It runs outside the lock and may be called concurrently and once per
 	// refused request. Callers should rate-limit any logging it does.
+	// Len and Exhausted are safe to call from the callback. Do not call Allow
+	// with an untracked key: while the table is full, each call re-enters
+	// OnFull and recurses until the stack overflows.
 	OnFull func()
 
 	// Now supplies nondecreasing time. Nil means time.Now. The limiter calls

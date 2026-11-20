@@ -93,18 +93,10 @@ func TestCapacityOverflowFailsOpenOnlyForUntrackedKeys(t *testing.T) {
 func TestOnFullAndLen(t *testing.T) {
 	for _, open := range []bool{false, true} {
 		t.Run(strconv.FormatBool(open), func(t *testing.T) {
-			var l *Limiter
 			calls := 0
-			var advance func(time.Duration)
-			l, advance = newTestLimiter(t, Config{
+			l, advance := newTestLimiter(t, Config{
 				Rate: 1, Burst: 1, MaxKeys: 1, MaxKeyBytes: 7, FailOpenWhenFull: open, IdleTTL: time.Minute,
-				OnFull: func() {
-					calls++
-					// The hook must be able to query the limiter without deadlocking.
-					if got := l.Len(); got != 1 {
-						t.Errorf("Len in OnFull = %d, want 1", got)
-					}
-				},
+				OnFull: func() { calls++ },
 			})
 			if l.Len() != 0 || !l.Allow("tracked") || l.Len() != 1 {
 				t.Fatal("Len did not reflect first insertion")
@@ -129,6 +121,36 @@ func TestOnFullAndLen(t *testing.T) {
 				t.Fatal("reclaimed capacity should admit the new key without calling OnFull")
 			}
 		})
+	}
+}
+
+func TestOnFullCanReenterForTrackedKey(t *testing.T) {
+	var l *Limiter
+	var observed struct {
+		len                   int
+		exhausted, spentToken bool
+	}
+	l, _ = newTestLimiter(t, Config{
+		Rate: 1, Burst: 2, MaxKeys: 1,
+		OnFull: func() {
+			observed.len = l.Len()
+			observed.exhausted = l.Exhausted("tracked")
+			observed.spentToken = l.Allow("tracked")
+		},
+	})
+	if !l.Allow("tracked") {
+		t.Fatal("could not seed the tracked key")
+	}
+
+	result := make(chan bool, 1)
+	go func() { result <- l.Allow("new") }()
+	select {
+	case allowed := <-result:
+		if allowed || observed.len != 1 || observed.exhausted || !observed.spentToken {
+			t.Fatalf("new key allowed = %t; within OnFull: %+v", allowed, observed)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnFull did not return: callback may be running under the limiter lock")
 	}
 }
 
