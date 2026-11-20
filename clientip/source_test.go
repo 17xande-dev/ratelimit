@@ -87,6 +87,7 @@ func TestSource(t *testing.T) {
 		{name: "bad peer yields invalid address", mode: "chain", peer: "not-an-ip", xff: []string{"192.0.2.50"}},
 		{name: "zoned peer normalised", mode: "zero", peer: "[fe80::1%eth0]:1234", want: "fe80::1"},
 		{name: "zoned header normalised", mode: "cloudflare", peer: proxy, cf: []string{"[fe80::1%eth1]:443"}, want: "fe80::1", fromHeader: true},
+		{name: "malformed bracket is not a zone", mode: "cloudflare", peer: proxy, cf: []string{"[fe80::1%eth1]]:443"}, want: "10.0.0.1"},
 		{name: "mapped header normalised", mode: "cloudflare", peer: proxy, cf: []string{"[::ffff:192.0.2.50]:443"}, want: "192.0.2.50", fromHeader: true},
 		{name: "mapped peer and hop match IPv4 CIDR", mode: "chain", peer: "[::ffff:10.0.0.1]:1234", xff: []string{"192.0.2.50, ::ffff:10.0.0.2"}, want: "192.0.2.50", fromHeader: true},
 	} {

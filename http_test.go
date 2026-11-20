@@ -67,6 +67,38 @@ func TestMiddlewareBuckets(t *testing.T) {
 	}
 }
 
+func TestMiddlewareTrustsOnlyConfiguredProxyPeers(t *testing.T) {
+	source, err := clientip.New(clientip.Config{
+		TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, _ := newTestLimiter(t, Config{Rate: 1, Burst: 1})
+	h := l.Middleware(source, HTTPOptions{})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, tc := range []struct {
+		peer, xff string
+		status    int
+	}{
+		{"192.0.2.1:1", "203.0.113.1", 204},
+		{"192.0.2.1:2", "203.0.113.2", 429},
+		{"10.0.0.2:1", "203.0.113.1, 198.51.100.1, 10.0.0.3", 204},
+		{"10.0.0.2:2", "203.0.113.2, 198.51.100.1, 10.0.0.3", 429},
+		{"10.0.0.2:3", "203.0.113.1, 198.51.100.2, 10.0.0.3", 204},
+	} {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = tc.peer
+		r.Header.Set("X-Forwarded-For", tc.xff)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Errorf("peer %q and XFF %q: got %d, want %d", tc.peer, tc.xff, w.Code, tc.status)
+		}
+	}
+}
+
 func TestMiddlewareOverflowUsesCustomResponse(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: 1, Burst: 1, MaxKeys: 1, IdleTTL: time.Minute})
 	nextCalls, exceededCalls := 0, 0

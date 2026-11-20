@@ -141,7 +141,11 @@ func parseAddr(value string) netip.Addr {
 		return netip.Addr{}
 	}
 	if ap, err := netip.ParseAddrPort(value); err == nil {
-		return ap.Addr().WithZone("").Unmap()
+		a := ap.Addr()
+		if strings.ContainsAny(a.Zone(), "[]") {
+			return netip.Addr{}
+		}
+		return a.WithZone("").Unmap()
 	}
 	if len(value) >= 2 && value[0] == '[' && value[len(value)-1] == ']' {
 		value = value[1 : len(value)-1]

@@ -114,6 +114,25 @@ func TestPeriodicSweepBelowCapacity(t *testing.T) {
 	}
 }
 
+func TestCapacityTriggersSweepBeforeNextPeriodicSweep(t *testing.T) {
+	l, advance := newTestLimiter(t, Config{Rate: 1, Burst: 1, MaxKeys: 2, IdleTTL: time.Minute})
+	if !l.Allow("first") {
+		t.Fatal("first request refused")
+	}
+	advance(10 * time.Second)
+	if !l.Allow("second") {
+		t.Fatal("second request refused")
+	}
+	advance(50 * time.Second)
+	if !l.Allow("third") || l.buckets["first"] != nil {
+		t.Fatal("periodic sweep failed to drop the oldest key")
+	}
+	advance(10 * time.Second)
+	if !l.Allow("fourth") || l.buckets["second"] != nil || len(l.buckets) != 2 {
+		t.Fatal("capacity did not force a sweep before the next regular sweep")
+	}
+}
+
 func TestSweepDoesNotRefillEarly(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: rate.Every(10 * time.Second), Burst: 2, MaxKeys: 1, IdleTTL: time.Second})
 	if !l.Allow("slow") || !l.Allow("slow") {
