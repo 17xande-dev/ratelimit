@@ -25,7 +25,8 @@ func newTestLimiter(t *testing.T, cfg Config) (*Limiter, func(time.Duration)) {
 
 func TestBurstRefillAndIndependentKeys(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: rate.Every(2 * time.Second), Burst: 2})
-	if !l.Allow("user") || !l.Allow("user") || l.Allow("user") || !l.Allow("other") {
+	first, second := l.Allow("user"), l.Allow("user")
+	if !first || !second || l.Allow("user") || !l.Allow("other") {
 		t.Fatal("burst is not independent per key")
 	}
 	advance(2*time.Second - time.Nanosecond)
@@ -135,8 +136,10 @@ func TestCapacityTriggersSweepBeforeNextPeriodicSweep(t *testing.T) {
 
 func TestSweepDoesNotRefillEarly(t *testing.T) {
 	l, advance := newTestLimiter(t, Config{Rate: rate.Every(10 * time.Second), Burst: 2, MaxKeys: 1, IdleTTL: time.Second})
-	if !l.Allow("slow") || !l.Allow("slow") {
-		t.Fatal("failed to consume full burst")
+	for i := range 2 {
+		if !l.Allow("slow") {
+			t.Fatalf("initial token %d refused", i+1)
+		}
 	}
 	advance(5 * time.Second)
 	if l.Allow("new") || !l.Exhausted("slow") {
