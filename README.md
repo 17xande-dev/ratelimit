@@ -44,7 +44,7 @@ bypass the ingress or control the part of the header being read.
 | Configuration | Address used |
 | --- | --- |
 | Zero `Source` or `ParseSource("remote")` | The socket peer. |
-| `New(Config{TrustedProxies: prefixes})` | Only for a peer in a trusted CIDR: scan `X-Forwarded-For` from right to left across all lines and stop at the first untrusted hop. |
+| `New(Config{TrustedProxies: prefixes})` | Only for a peer in a trusted CIDR: scan `X-Forwarded-For` from right to left across all lines and stop at the first untrusted hop. Every trusted proxy in the chain must append the actual address of its immediate peer. |
 | `New(Config{TrustedHeader: "X-Forwarded-For"})` | Rightmost item of the last line, for an ingress that appends the observed client. |
 | `ParseSource("forwarded")` | Leftmost item of the first line, preserving the named mode for an ingress that **replaces** all incoming copies. Never use it with an appending ingress. |
 | `New(Config{TrustedHeader: "X-Real-IP"})` | One value on one line, for an ingress that overwrites the header. |
@@ -59,12 +59,15 @@ source, err := clientip.New(clientip.Config{
 ```
 
 Check the configuration error before serving. CIDRs and a trusted header are
-mutually exclusive. CIDR mode **does not also honour `CF-Connecting-IP`**;
-verify ingress behaviour before replacing a resolver that read both. Prefer
-peer-only or CIDR mode when direct connections are possible. A missing or
-malformed selected address, repeated single-value header, untrusted peer in
-CIDR mode, or chain with no untrusted hop falls back to the peer. The CIDR
-scan never skips a malformed hop to reach an earlier value.
+mutually exclusive. Both IPv4 and IPv6 `/0` prefixes are rejected, including
+IPv4-mapped prefixes equivalent to an IPv4 `/0`. CIDR mode reads **only
+`X-Forwarded-For`**, not `CF-Connecting-IP`; verify ingress behaviour before
+replacing a resolver that read both. Prefer peer-only or CIDR mode when direct
+connections are possible. A missing or malformed selected address, repeated
+single-value header, untrusted peer in CIDR mode, or chain with no untrusted
+hop falls back to the peer. The CIDR scan never skips a malformed hop and
+falls back to the peer if it cannot find an untrusted hop within 64 entries.
+Individual address candidates longer than 256 bytes are treated as malformed.
 
 `Source.Addr` returns a `netip.Addr`, not a bucket key. IPv4 and bracketed IPv6
 ports are stripped, IPv6 zones are removed, and mapped IPv4 is unmapped. Use

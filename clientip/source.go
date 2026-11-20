@@ -8,11 +8,16 @@ import (
 	"strings"
 )
 
-const forwardedFor = "X-Forwarded-For"
+const (
+	forwardedFor     = "X-Forwarded-For"
+	maxForwardedHops = 64
+	maxAddressBytes  = 256
+)
 
 // Config selects a proxy policy. Set at most one field.
 type Config struct {
-	// TrustedProxies identifies controlled hops that append to X-Forwarded-For.
+	// TrustedProxies identifies controlled hops that append their actual peers
+	// to X-Forwarded-For. IPv4 and IPv6 /0 prefixes are not permitted.
 	TrustedProxies []netip.Prefix
 	// TrustedHeader requires an ingress that controls the named header and
 	// cannot be bypassed. X-Forwarded-For uses its rightmost entry; any other
@@ -41,6 +46,9 @@ func New(cfg Config) (Source, error) {
 	for _, p := range cfg.TrustedProxies {
 		if !p.IsValid() {
 			return Source{}, fmt.Errorf("clientip: invalid trusted proxy prefix")
+		}
+		if p.Bits() == 0 || (p.Addr().Is4In6() && p.Bits() == 96) {
+			return Source{}, fmt.Errorf("clientip: trusted proxy prefix %s would trust every address in its family (/0)", p)
 		}
 		if p.Addr().Is4In6() {
 			if p.Bits() < 96 {
@@ -105,9 +113,16 @@ func (s Source) HeaderAddr(r *http.Request) netip.Addr {
 		return netip.Addr{}
 	}
 	lines := r.Header.Values(forwardedFor)
+	hops := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := lines[i]
 		for {
+			if hops == maxForwardedHops {
+				// The trust boundary is still unknown. Use the peer instead
+				// of scanning a potentially unbounded chain.
+				return netip.Addr{}
+			}
+			hops++
 			comma := strings.LastIndexByte(line, ',')
 			hop := parseAddr(line[comma+1:])
 			// A malformed hop does not establish that the next hop to its
@@ -134,6 +149,11 @@ func (s Source) trusted(a netip.Addr) bool {
 }
 
 func parseAddr(value string) netip.Addr {
+	// Avoid parsing (and allocating errors or zone strings for) oversized
+	// values. Ordinary addresses and ports fit with room for padding and zones.
+	if len(value) > maxAddressBytes {
+		return netip.Addr{}
+	}
 	value = strings.TrimSpace(value)
 	// netip permits arbitrary zone text, including list separators. A
 	// single-address header must not silently accept an address list.

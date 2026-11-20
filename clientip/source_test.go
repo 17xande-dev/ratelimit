@@ -3,6 +3,7 @@ package clientip_test
 import (
 	"net/http"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/17xande-dev/ratelimit/clientip"
@@ -143,6 +144,48 @@ func TestNewCopiesMappedProxyPrefixes(t *testing.T) {
 	r := &http.Request{RemoteAddr: "10.0.0.2:443", Header: http.Header{"X-Forwarded-For": {"198.51.100.1"}}}
 	if got := src.Addr(r); got != netip.MustParseAddr("198.51.100.1") {
 		t.Errorf("Addr = %s, want 198.51.100.1", got)
+	}
+}
+
+func TestNewRejectsWildcardTrust(t *testing.T) {
+	for _, prefix := range []string{"0.0.0.0/0", "::/0", "::ffff:0.0.0.0/96"} {
+		t.Run(prefix, func(t *testing.T) {
+			_, err := clientip.New(clientip.Config{TrustedProxies: []netip.Prefix{
+				netip.MustParsePrefix("192.0.2.0/24"),
+				netip.MustParsePrefix(prefix),
+			}})
+			if err == nil || !strings.Contains(err.Error(), "/0") {
+				t.Errorf("New with %s = %v, want an explicit /0 refusal", prefix, err)
+			}
+		})
+	}
+}
+
+func TestTrustedChainHopLimit(t *testing.T) {
+	src, err := clientip.New(clientip.Config{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const untrusted = "192.0.2.50"
+	const trusted = ", 10.0.0.2"
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"64th is untrusted", []string{untrusted + strings.Repeat(trusted, 63)}, untrusted},
+		{"65th is untrusted", []string{untrusted + strings.Repeat(trusted, 64)}, "10.0.0.1"},
+		{"limit spans lines", []string{untrusted, strings.TrimPrefix(strings.Repeat(trusted, 64), ", ")}, "10.0.0.1"},
+		{"large unneeded prefix", []string{untrusted + strings.Repeat(trusted, 1<<17) + ", " + untrusted}, untrusted},
+		{"large all-trusted suffix", []string{untrusted + strings.Repeat(trusted, 1<<17)}, "10.0.0.1"},
+		{"oversized individual hop", []string{untrusted + ", fe80::1%" + strings.Repeat("x", 1<<20)}, "10.0.0.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &http.Request{RemoteAddr: "10.0.0.1:443", Header: http.Header{"X-Forwarded-For": tc.lines}}
+			if got := src.Addr(r); got != netip.MustParseAddr(tc.want) {
+				t.Errorf("Addr = %s, want %s", got, tc.want)
+			}
+		})
 	}
 }
 
