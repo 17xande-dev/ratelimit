@@ -1,4 +1,4 @@
-.PHONY: fmt-check vet test vulncheck
+.PHONY: fmt-check vet test vulncheck fuzz
 
 fmt-check:
 	@files="$$(gofmt -l .)" && test -z "$$files" || { printf '%s\n' "$$files"; exit 1; }
@@ -11,3 +11,6 @@ test:
 
 vulncheck:
 	go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+fuzz:
+	go test -run '^$$' -fuzz FuzzAccountKey -fuzztime 60s .

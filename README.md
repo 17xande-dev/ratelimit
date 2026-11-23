@@ -82,22 +82,28 @@ ingress provenance.
 
 ## Per-account or other second tier
 
-Use a separate limiter for each tier. Check the IP tier first, then call
-`Allow` with the application-normalised identifier once the request reaches
-the protected operation:
+Use a separate limiter for each tier. Check the IP tier first, then use
+`AccountKey` to key the account tier by email address or username:
 
 ```go
-if !accountLimit.Allow(normalizedAccount) {
+if !accountLimit.Allow(ratelimit.AccountKey(account)) {
     http.Error(w, "too many requests", http.StatusTooManyRequests)
     return
 }
 ```
 
-Oversized keys are refused, not truncated or hashed. Apply existing input
-validation and user-facing responses before this check if they should remain
-unchanged. For failure-only accounting, `Exhausted` tests without consuming a
-token or inserting a key. An `Exhausted` check followed by `Allow` after a
-failure is not atomic; concurrent failures can pass the check together.
+`AccountKey` trims surrounding white space and lower-cases the identifier.
+If the result exceeds `MaxAccountKeyBytes` (200 bytes), the helper returns
+`sha256:` followed by the hex SHA-256 of the normalised identifier. Use it
+only with limiters whose `MaxKeyBytes` is at least 200 (the default is 256).
+
+For other second-tier keys, `Allow` refuses keys that exceed `MaxKeyBytes`;
+it does not truncate or hash them. `AccountKey` does not validate identifiers:
+apply existing input validation and user-facing responses before the limit
+check if they should remain unchanged. For failure-only accounting,
+`Exhausted` tests without consuming a token or inserting a key. An `Exhausted`
+check followed by `Allow` after a failure is not atomic; concurrent failures
+can pass the check together.
 
 ## Memory and overflow
 
