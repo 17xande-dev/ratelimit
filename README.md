@@ -134,3 +134,7 @@ table is full, each refusal re-enters `OnFull` until the stack overflows.
 Run `make fmt-check vet test vulncheck` before committing. The test target
 enables the race detector; clock-dependent tests advance an injected clock
 instead of sleeping.
+
+## License
+
+This module is licensed under the [MIT No Attribution license](LICENSE).
